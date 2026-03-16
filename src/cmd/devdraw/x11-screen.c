@@ -312,6 +312,8 @@ xloop(void)
 	}
 }
 
+static int kcodecontrol, kcodealt, kcodeshift;
+
 /*
  * Handle an incoming X event.
  */
@@ -319,11 +321,14 @@ static void
 runxevent(XEvent *xev)
 {
 	int c;
+	int modp;
 	KeySym k;
 	static Mouse m;
 	XButtonEvent *be;
 	XKeyEvent *ke;
 	Xwin *w;
+
+	modp = 0;
 
 #ifdef SHOWEVENT
 	static int first = 1;
@@ -367,13 +372,23 @@ runxevent(XEvent *xev)
 	case FocusOut:
 		w = findxwin(((XFocusChangeEvent*)xev)->window);
 		break;
+	case MapNotify:
+		w = findxwin(((XMapEvent*)xev)->window);
+		break;
 	}
 	if(w == nil)
 		w = _x.windows;
 
+	int shift;
 	switch(xev->type){
 	case Expose:
 		_xexpose(w, xev);
+		break;
+
+	case MapNotify:
+		if(w->screenpm == w->nextscreenpm) {
+ 		           XCopyArea(_x.display, w->screenpm, w->drawable, _x.gccopy,0, 0, Dx(w->screenr), Dy(w->screenr), 0, 0);
+		}
 		break;
 
 	case DestroyNotify:
@@ -401,7 +416,10 @@ runxevent(XEvent *xev)
 	case MotionNotify:
 		if(_xtoplan9mouse(w, xev, &m) < 0)
 			return;
-		gfx_mousetrack(w->client, m.xy.x, m.xy.y, m.buttons|_x.kbuttons, m.msec);
+		shift = 0;
+		if(_x.kstate & ShiftMask)
+			shift = 5;
+		gfx_mousetrack(w->client, m.xy.x, m.xy.y, (m.buttons|_x.kbuttons)<<shift, m.msec);
 		break;
 
 	case KeyRelease:
@@ -424,31 +442,54 @@ runxevent(XEvent *xev)
 			break;
 		}
 
-		switch(k) {
-		case XK_Control_L:
-			if(xev->type == KeyPress)
+		if(xev->type == KeyPress)
+			switch(k) {
+			case XK_Control_L:
+			case XK_Control_R:
+				kcodecontrol = ke->keycode;
 				c |= ControlMask;
-			else
-				c &= ~ControlMask;
-			goto kbutton;
-		case XK_Alt_L:
-		case XK_Shift_L:
-			if(xev->type == KeyPress)
+				modp = 1;
+				break;
+			case XK_Alt_L:
+			case XK_Alt_R:
+				kcodealt = ke->keycode;
 				c |= Mod1Mask;
-			else
+				modp = 1;
+				break;
+			case XK_Shift_L:
+			case XK_Shift_R:
+				kcodeshift = ke->keycode;
+				c |= ShiftMask;
+				modp = 1;
+				break;
+			}
+		else {
+			if(ke->keycode == kcodecontrol){
+				c &= ~ControlMask;
+				modp = 1;
+		        } else if(ke->keycode == kcodealt){
 				c &= ~Mod1Mask;
-		kbutton:
+				modp = 1;
+			} else if(ke->keycode == kcodeshift) {
+				c &= ~ShiftMask;
+				modp = 1;
+			}
+		}
+		if(modp){
 			_x.kstate = c;
 			if(m.buttons || _x.kbuttons) {
+				int shift = 0;
 				_x.altdown = 0; // used alt
 				_x.kbuttons = 0;
 				if(c & ControlMask)
 					_x.kbuttons |= 2;
 				if(c & Mod1Mask)
 					_x.kbuttons |= 4;
-				gfx_mousetrack(w->client, m.xy.x, m.xy.y, m.buttons|_x.kbuttons, m.msec);
-				break;
+				if(c & ShiftMask)
+					shift = 5;
+				gfx_mousetrack(w->client, m.xy.x, m.xy.y, (m.buttons|_x.kbuttons)<<shift, m.msec);
 			}
+			modp = 0;
 		}
 
 		if(xev->type != KeyPress)
@@ -470,6 +511,7 @@ runxevent(XEvent *xev)
 		 * so clear out the keyboard state when we lose the focus.
 		 */
 		_x.kstate = 0;
+		_x.kbuttons = 0;
 		_x.altdown = 0;
 		gfx_abortcompose(w->client);
 		break;
@@ -591,6 +633,7 @@ xattach(Client *client, char *label, char *winsize)
 		CWBackPixel|CWBorderPixel|CWColormap,
 		&attr		/* attributes (the above aren't?!) */
 	);
+	XSelectInput(_x.display, w->drawable, StructureNotifyMask | PropertyChangeMask);
 
 	/*
 	 * Label and other properties required by ICCCCM.
@@ -1243,10 +1286,18 @@ _xtoplan9kbd(XEvent *e)
 	return k+0;
 }
 
+int
+_xtoplan9buttons(unsigned int b)
+{
+	if(b == 0){
+		return 0;
+	}
+	return 1<<(b-1);
+}
+
 static int
 _xtoplan9mouse(Xwin *w, XEvent *e, Mouse *m)
 {
-	int s;
 	XButtonEvent *be;
 	XMotionEvent *me;
 
@@ -1275,54 +1326,18 @@ _xtoplan9mouse(Xwin *w, XEvent *e, Mouse *m)
 		/* BUG? on mac need to inherit these from elsewhere? */
 		m->xy.x = be->x;
 		m->xy.y = be->y;
-		s = be->state;
 		m->msec = be->time;
-		switch(be->button){
-		case 1:
-			s |= Button1Mask;
-			break;
-		case 2:
-			s |= Button2Mask;
-			break;
-		case 3:
-			s |= Button3Mask;
-			break;
-		case 4:
-			s |= Button4Mask;
-			break;
-		case 5:
-			s |= Button5Mask;
-			break;
-		}
+		m->buttons |= _xtoplan9buttons(be->button);
 		break;
 	case ButtonRelease:
 		be = (XButtonEvent*)e;
 		m->xy.x = be->x;
 		m->xy.y = be->y;
-		s = be->state;
 		m->msec = be->time;
-		switch(be->button){
-		case 1:
-			s &= ~Button1Mask;
-			break;
-		case 2:
-			s &= ~Button2Mask;
-			break;
-		case 3:
-			s &= ~Button3Mask;
-			break;
-		case 4:
-			s &= ~Button4Mask;
-			break;
-		case 5:
-			s &= ~Button5Mask;
-			break;
-		}
-		break;
+		m->buttons &= ~_xtoplan9buttons(be->button);
 
 	case MotionNotify:
 		me = (XMotionEvent*)e;
-		s = me->state;
 		m->xy.x = me->x;
 		m->xy.y = me->y;
 		m->msec = me->time;
@@ -1331,28 +1346,39 @@ _xtoplan9mouse(Xwin *w, XEvent *e, Mouse *m)
 	default:
 		return -1;
 	}
-
-	m->buttons = 0;
-	if(s & Button1Mask)
-		m->buttons |= 1;
-	if(s & Button2Mask)
-		m->buttons |= 2;
-	if(s & Button3Mask)
-		m->buttons |= 4;
-	if(s & Button4Mask)
-		m->buttons |= 8;
-	if(s & Button5Mask)
-		m->buttons |= 16;
 	return 0;
 }
 
 void
 rpc_setmouse(Client *client, Point p)
 {
+	static XCursor empty_cursor;
 	Xwin *w = (Xwin*)client->view;
 
 	xlock();
+	// XWayland hack - hide cursor before warping
+	// see https://github.com/libsdl-org/SDL/issues/9539
+	if(!empty_cursor){
+		Pixmap bm;
+		XColor black;
+		char bmd[] = { 0 };
+		bm = XCreateBitmapFromData(_x.display, w->drawable, bmd, 1, 1);
+		if(bm){
+			empty_cursor = XCreatePixmapCursor(_x.display, bm, bm, &black, &black, 0, 0);
+			XFreePixmap(_x.display, bm);
+		}
+	}
+
+	if(empty_cursor){
+		XDefineCursor(_x.display, w->drawable, empty_cursor);
+		XFlush(_x.display);
+	}
+
 	XWarpPointer(_x.display, None, w->drawable, 0, 0, 0, 0, p.x, p.y);
+
+	if(empty_cursor)
+		XDefineCursor(_x.display, w->drawable, _x.cursor);
+
 	XFlush(_x.display);
 	xunlock();
 }
@@ -1596,8 +1622,9 @@ if(0) fprint(2, "xselect target=%d requestor=%d property=%d selection=%d (sizeof
 	|| xe->target == _x.utf8string
 	|| xe->target == _x.text
 	|| xe->target == _x.compoundtext
-	|| ((name = XGetAtomName(_x.display, xe->target)) && strcmp(name, "text/plain;charset=UTF-8") == 0)){
+	|| ((name = XGetAtomName(_x.display, xe->target)) && strcasecmp(name, "text/plain;charset=UTF-8") == 0)){
 		/* text/plain;charset=UTF-8 seems nonstandard but is used by Synergy */
+		/* text/plain;charset=utf-8 is used by xfce4-terminal 1.0.4 */
 		/* if the target is STRING we're supposed to reply with Latin1 XXX */
 		qlock(&clip.lk);
 		XChangeProperty(_x.display, xe->requestor, xe->property, xe->target,

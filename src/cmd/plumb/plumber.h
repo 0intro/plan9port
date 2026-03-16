@@ -52,10 +52,15 @@ struct Ruleset
 	char	*port;
 };
 
+enum
+{
+	NMATCHSUBEXP = 100	/* bounded by ../../libregexp/regcomp.h:/NSUBEXP */
+};
+
 struct Exec
 {
 	Plumbmsg	*msg;
-	char			*match[10];
+	char			*match[NMATCHSUBEXP];
 	int			p0;		/* begin and end of match */
 	int			p1;
 	int			clearclick;	/* click was expanded; remove attribute */
@@ -84,11 +89,11 @@ void		makeports(Ruleset*[]);
 void		printinputstack(void);
 int		popinput(void);
 
-Ruleset	**rules;
-char		*user;
-char		*home;
-jmp_buf	parsejmp;
-char		*lasterror;
-char		**ports;
-int		nports;
-int		debug;
+extern Ruleset	**rules;
+extern char	*user;
+extern char	*home;
+extern jmp_buf	parsejmp;
+extern char	*lasterror;
+extern char	**ports;
+extern int	nports;
+extern int	debug;

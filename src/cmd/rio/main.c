@@ -213,6 +213,10 @@ main(int argc, char *argv[])
 
 	num_screens = ScreenCount(dpy);
 	screens = (ScreenInfo *)malloc(sizeof(ScreenInfo) * num_screens);
+	if (!screens){
+		fprintf(stderr, "rio: Failed to allocate memory\n");
+		return 1;
+	}
 
 	for(i = 0; i < num_screens; i++)
 		initscreen(&screens[i], i, background);
@@ -467,8 +471,9 @@ sendconfig(Client *c)
 }
 
 void
-sighandler(void)
+sighandler(int _signo)
 {
+	(void)_signo;
 	signalled = 1;
 }
 
